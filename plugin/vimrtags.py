@@ -127,6 +127,7 @@ def parse_completion_result(data):
         match = {'menu': description, 'word': c['completion'], 'kind': kind}
         completions.append(match)
 
+    logger.debug("Found %s completions" % len(completions))
     return completions
 
 
@@ -251,15 +252,13 @@ class Buffer(object):
             '--diagnose-all', '--current-file', vim.current.buffer.name,
             '--synchronous-diagnostics', '--json'
         ])
-        content = run_rc_command(['--diagnose-all',  '--synchronous-diagnostics', '--json'])
         if content is None:
             return error('Failed to get diagnostics')
         data = json.loads(content)
 
         # Construct Diagnostic objects from rtags errors.
-        diagnostics = []
-        for filename, errors in data['checkStyle'].items():
-            diagnostics += Diagnostic.from_rtags_errors(filename, errors)
+        diagnostics = Diagnostic.from_rtags_errors(data['checkStyle'])
+        logger.debug("Got %d diagnostics" % len(diagnostics))
 
         if not diagnostics:
             return message("No errors to display")
@@ -487,18 +486,19 @@ class Buffer(object):
 
         # Get the diagnostics from rtags.
         content = run_rc_command(
-            ['--diagnose', self._vimbuffer.name, '--synchronous-diagnostics', '--json']
+            ['--diagnose-all', '--synchronous-diagnostics', '--json']
         )
         if content is None:
             return error('Failed to get diagnostics for "%s"' % self._vimbuffer.name)
         # logger.debug("Diagnostics for %s from rtags: %s" % (self._vimbuffer.name, content))
         data = json.loads(content)
-        errors = data['checkStyle'][self._vimbuffer.name]
-        logger.debug("Got %d diagnostics for %s" % (len(errors), self._vimbuffer.name))
+        # Construct Diagnostic objects from rtags response.
+        diagnostics = Diagnostic.from_rtags_errors(data['checkStyle'], target=self._vimbuffer.name)
+        logger.debug("Got %d diagnostics for %s" % (len(diagnostics), self._vimbuffer.name))
+        logger.debug("Diagnostics: \n%s" % "\n".join((str(d) for d in diagnostics)))
 
-        # Construct Diagnostic objects from rtags response, and cache keyed by line number.
-        for diagnostic in Diagnostic.from_rtags_errors(self._vimbuffer.name, errors):
-            self._diagnostics[diagnostic.line_num] = diagnostic
+        # Cache keyed by line number.
+        self._diagnostics = {diagnostic.sign_line: diagnostic for diagnostic in diagnostics}
 
         # Update location list with new diagnostics, if ours is currently at the top of the stack.
         self._update_loclist(open_loclist)
@@ -559,7 +559,7 @@ class Buffer(object):
         used_ids = Sign.used_ids(self._vimbuffer.number)
         logger.debug("Appending %s signs to %s" % (len(self._diagnostics), self._vimbuffer.name))
         for diagnostic in self._diagnostics.values():
-            self._place_sign(diagnostic.line_num, diagnostic.type, used_ids)
+            self._place_sign(diagnostic.sign_line, diagnostic.type, used_ids)
 
     def _place_sign(self, line_num, name, used_ids):
         """ Create, place and remember a diagnostic gutter sign.
@@ -660,26 +660,47 @@ class Project(object):
 class Diagnostic(object):
 
     @staticmethod
-    def from_rtags_errors(filename, errors):
+    def from_rtags_errors(file_errors, target=None):
         diagnostics = []
-        for e in errors:
-            if e['type'] == 'skipped':
-                continue
-            # strip error prefix
-            s = ' Issue: '
-            index = e['message'].find(s)
-            if index != -1:
-                e['message'] = e['message'][index + len(s):]
-                diagnostics.append(
-                    Diagnostic(filename, e['line'], e['column'], e['type'], e['message'])
-                )
+        for filename, errors in file_errors.items():
+            for e in errors:
+                if e['type'] == 'skipped':
+                    continue
+                if target is not None and target != filename:
+                    if 'children' not in e:
+                        continue
+                    for child in reversed(e['children']):
+                        if 'file' in child and child['file'] == target:
+                            logger.debug(
+                                "Found diagnostic child with message: %s" % child['message']
+                            )
+                            sign_line = child['line']
+                            break
+                    else:
+                        continue
+                else:
+                    sign_line = e['line']
+
+                line = e['line']
+                column = e['column']
+                type_ = e['type']
+                message = e['message']
+
+                # strip error prefix
+                s = ' Issue: '
+                index = message.find(s)
+                if index != -1:
+                    message = message[index + len(s):]
+                    diagnostics.append(
+                        Diagnostic(filename, line, column, sign_line, type_, message)
+                    )
         return diagnostics
 
     @staticmethod
     def to_qlist_errors(diagnostics):
         num_diagnostics = len(diagnostics)
         # Sort diagnostics into display order. Errors at top, grouped by filename in line num order.
-        diagnostics = sorted(diagnostics, key=lambda d: (d.type, d._filename, d.line_num))
+        diagnostics = sorted(diagnostics, key=lambda d: (d.type, d._filename, d._line_num))
         # Convert Diagnostic objects into quickfix compatible dicts.
         diagnostics = [d._to_qlist_dict() for d in diagnostics]
         # Add error number to diagnostic (shows in list, maybe useful for navigation?).
@@ -693,10 +714,11 @@ class Diagnostic(object):
 
         return height, diagnostics
 
-    def __init__(self, filename, line_num, char_num, type_, text):
+    def __init__(self, filename, line_num, char_num, sign_line, type_, text):
         self._filename = filename
-        self.line_num = line_num
+        self._line_num = line_num
         self._char_num = char_num
+        self.sign_line = sign_line
         self.type = type_
         self.text = text
 
@@ -704,9 +726,14 @@ class Diagnostic(object):
         error_type = "W" if self.type == "warning" else "E"
         text = self.text if self.type != "fixit" else self.text + " [FIXIT]"
         return {
-            'lnum': self.line_num, 'col': self._char_num, 'text': text,
+            'lnum': self._line_num, 'col': self._char_num, 'text': text,
             'filename': self._filename, 'type': error_type
         }
+
+    def __repr__(self):
+        return "%s:%s:%s %s: %s" % (
+            self._filename, self._line_num, self._char_num, self.type, self.text
+        )
 
 
 class Sign(object):

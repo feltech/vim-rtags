@@ -36,6 +36,7 @@ class Test_configure_logger(VimRtagsTest):
         logger.addHandler.assert_called_once_with(logging.FileHandler.return_value)
 
 
+@patch("plugin.vimrtags.logger", Mock(spec=logging.Logger))
 class Test_parse_completion_result(VimRtagsTest):
 
     def test(self):
@@ -240,6 +241,7 @@ class Test_Buffer__clean_cache(VimRtagsTest):
         self.assertDictEqual(vimrtags.Buffer._cache, {3: valid_buffer})
 
 
+@patch("plugin.vimrtags.logger", Mock(spec=logging.Logger))
 @patch("plugin.vimrtags.run_rc_command", autospec=True)
 class Test_Buffer_show_all_diagnostics(VimRtagsTest):
 
@@ -261,7 +263,7 @@ class Test_Buffer_show_all_diagnostics(VimRtagsTest):
         run_rc_command.return_value = (
             '{"checkStyle": {"file 1": ["error 1", "error 2"], "file 2": ["error 3"]}}'
         )
-        Diagnostic.from_rtags_errors.side_effect = [["diag 1", "diag 2"], ["diag 3"]]
+        Diagnostic.from_rtags_errors.side_effect = [["diag 1", "diag 2", "diag 3"]]
         Diagnostic.to_qlist_errors.return_value = (123, "lines")
         vim.current.window.number = 7
 
@@ -296,12 +298,10 @@ class Test_Buffer_show_all_diagnostics(VimRtagsTest):
         vim.command.assert_called_once_with("copen 123")
 
     def assert_diagnostics_constructed(self, Diagnostic):
-        self.assertListEqual(
-            Diagnostic.from_rtags_errors.call_args_list, [
-                call("file 1", ["error 1", "error 2"]),
-                call("file 2", ["error 3"])
-            ]
-        )
+        Diagnostic.from_rtags_errors.assert_called_once_with({
+            "file 1": ["error 1", "error 2"],
+            "file 2": ["error 3"]
+        })
         Diagnostic.to_qlist_errors.assert_called_once_with(["diag 1", "diag 2", "diag 3"])
 
 
@@ -809,8 +809,8 @@ class Test_Buffer__update_diagnostics(BufferInstanceTest):
 
         run_rc_command.return_value = '{"checkStyle": {"mock buffer": ["diag 1", "diag 2"]}}'
 
-        diag1 = Mock(line_num=3)
-        diag2 = Mock(line_num=12)
+        diag1 = Mock(sign_line=3)
+        diag2 = Mock(sign_line=12)
         Diagnostic.from_rtags_errors.return_value = [diag1, diag2]
 
         on_cursor_moved.side_effect = (
@@ -824,9 +824,11 @@ class Test_Buffer__update_diagnostics(BufferInstanceTest):
         # confirm
 
         run_rc_command.assert_called_once_with([
-            '--diagnose', "mock buffer", '--synchronous-diagnostics', '--json'
+            '--diagnose-all', '--synchronous-diagnostics', '--json'
         ])
-        Diagnostic.from_rtags_errors.assert_called_once_with("mock buffer", ["diag 1", "diag 2"])
+        Diagnostic.from_rtags_errors.assert_called_once_with(
+            {'mock buffer': ["diag 1", "diag 2"]}, target="mock buffer"
+        )
 
         self.assertDictEqual(self.buffer._diagnostics, {3: diag1, 12: diag2})
 
@@ -926,8 +928,8 @@ class Test_Buffer__place_signs(BufferInstanceTest):
 
     def test(self, _place_sign, _reset_signs, Sign):
         self.buffer._diagnostics = MagicMock(values=Mock(return_value=[
-            Mock(spec=vimrtags.Diagnostic, line_num=4, type="a"),
-            Mock(spec=vimrtags.Diagnostic, line_num=65, type="b")
+            Mock(spec=vimrtags.Diagnostic, line_num=4, type="a", sign_line=5),
+            Mock(spec=vimrtags.Diagnostic, line_num=65, type="b", sign_line=66)
         ]))
         calls = MagicMock()
         calls.attach_mock(_reset_signs, "reset")
@@ -939,8 +941,8 @@ class Test_Buffer__place_signs(BufferInstanceTest):
         self.assertListEqual(
             calls.method_calls, [
                 call.reset(),
-                call.place(4, "a", Sign.used_ids.return_value),
-                call.place(65, "b", Sign.used_ids.return_value)
+                call.place(5, "a", Sign.used_ids.return_value),
+                call.place(66, "b", Sign.used_ids.return_value)
             ]
         )
 
@@ -1119,27 +1121,96 @@ class Test_Project_last_updated_time(VimRtagsTest):
         self.assertEqual(mtime, 0)
 
 
+@patch("plugin.vimrtags.logger", Mock(spec=logging.Logger))
 class Test_Diagnostic_from_rtags_errors(VimRtagsTest):
-    def test(self):
-        errors = [
-            {'type': "type 1", 'line': 123, 'column': 345, 'message': "a Issue: message 1"},
-            {'type': "skipped"},
-            {'type': "type 2", 'line': 567, 'column': 789, 'message': "a Issue: message 2"}
-        ]
+    def setUp(self):
+        super(Test_Diagnostic_from_rtags_errors, self).setUp()
+        self.errors = {
+            "/some/file.ext": [
+                {
+                    'type': "type 1", 'line': 123, 'column': 345,
+                    'message': "a Issue: message 1"
+                },
+                {'type': "skipped"},
+                {
+                    'type': "hide me", 'line': 567, 'column': 789,
+                    'message': "some irrelevant text"
+                },
+                {
+                    'type': "type 2", 'line': 567, 'column': 789,
+                    'message': "a Issue: message 2"
+                }
+            ],
+            "/other/file": [
+                {
+                    'type': "type 4", 'line': 432, 'column': 65,
+                    'message': "a Issue: message 4"
+                },
+                {
+                    'type': "type 3", 'line': 678, 'column': 89,
+                    'message': "a Issue: message 3",
+                    'children': [
+                        {},
+                        {'file': "/other/file", 'line': 13, 'message': "a Issue: dont show"},
+                        {'file': "/some/file.ext", 'line': 12, 'message': "a Issue: dont show"}
+                    ]
+                }
+            ]
+        }
 
-        diagnostics = vimrtags.Diagnostic.from_rtags_errors("/some/file.ext", errors)
+    def test_with_target(self):
+        target = "/some/file.ext"
 
-        self.assertEqual(len(diagnostics), 2)
-        self.assertEqual(diagnostics[0]._filename, "/some/file.ext")
-        self.assertEqual(diagnostics[0].line_num, 123)
+        diagnostics = vimrtags.Diagnostic.from_rtags_errors(self.errors, target=target)
+
+        self.assertEqual(len(diagnostics), 3)
+        self.assertEqual(diagnostics[0]._filename, target)
+        self.assertEqual(diagnostics[0]._line_num, 123)
         self.assertEqual(diagnostics[0]._char_num, 345)
+        self.assertEqual(diagnostics[0].sign_line, 123)
+        self.assertEqual(diagnostics[0].type, "type 1")
+        self.assertEqual(diagnostics[0].text, "message 1")
+        self.assertEqual(diagnostics[1]._filename, target)
+        self.assertEqual(diagnostics[1]._line_num, 567)
+        self.assertEqual(diagnostics[1]._char_num, 789)
+        self.assertEqual(diagnostics[1].sign_line, 567)
+        self.assertEqual(diagnostics[1].type, "type 2")
+        self.assertEqual(diagnostics[1].text, "message 2")
+        self.assertEqual(diagnostics[2]._filename, "/other/file")
+        self.assertEqual(diagnostics[2]._line_num, 678)
+        self.assertEqual(diagnostics[2]._char_num, 89)
+        self.assertEqual(diagnostics[2].sign_line, 12)
+        self.assertEqual(diagnostics[2].type, "type 3")
+        self.assertEqual(diagnostics[2].text, "message 3")
+
+    def test_without_target(self):
+        diagnostics = vimrtags.Diagnostic.from_rtags_errors(self.errors)
+
+        self.assertEqual(len(diagnostics), 4)
+        self.assertEqual(diagnostics[0]._filename, "/some/file.ext")
+        self.assertEqual(diagnostics[0]._line_num, 123)
+        self.assertEqual(diagnostics[0]._char_num, 345)
+        self.assertEqual(diagnostics[0].sign_line, 123)
         self.assertEqual(diagnostics[0].type, "type 1")
         self.assertEqual(diagnostics[0].text, "message 1")
         self.assertEqual(diagnostics[1]._filename, "/some/file.ext")
-        self.assertEqual(diagnostics[1].line_num, 567)
+        self.assertEqual(diagnostics[1]._line_num, 567)
         self.assertEqual(diagnostics[1]._char_num, 789)
+        self.assertEqual(diagnostics[1].sign_line, 567)
         self.assertEqual(diagnostics[1].type, "type 2")
         self.assertEqual(diagnostics[1].text, "message 2")
+        self.assertEqual(diagnostics[2]._filename, "/other/file")
+        self.assertEqual(diagnostics[2]._line_num, 432)
+        self.assertEqual(diagnostics[2]._char_num, 65)
+        self.assertEqual(diagnostics[2].sign_line, 432)
+        self.assertEqual(diagnostics[2].type, "type 4")
+        self.assertEqual(diagnostics[2].text, "message 4")
+        self.assertEqual(diagnostics[3]._filename, "/other/file")
+        self.assertEqual(diagnostics[3]._line_num, 678)
+        self.assertEqual(diagnostics[3]._char_num, 89)
+        self.assertEqual(diagnostics[3].sign_line, 678)
+        self.assertEqual(diagnostics[3].type, "type 3")
+        self.assertEqual(diagnostics[3].text, "message 3")
 
 
 @patch("plugin.vimrtags.get_rtags_variable", autospec=True)
@@ -1147,10 +1218,10 @@ class Test_Diagnostic_from_rtags_errors(VimRtagsTest):
 class Test_Diagnostic_to_qlist_errors(VimRtagsTest):
     def prepare(self, _to_qlist_dict):
         self.diagnostics = [
-            vimrtags.Diagnostic("file2", 3, 1, "W", "message"),
-            vimrtags.Diagnostic("file2", 4, 2, "E", "message"),
-            vimrtags.Diagnostic("file2", 4, 3, "W", "message"),
-            vimrtags.Diagnostic("file1", 4, 4, "W", "message")
+            vimrtags.Diagnostic("file2", 3, 1, 5, "W", "message"),
+            vimrtags.Diagnostic("file2", 4, 2, 6, "E", "message"),
+            vimrtags.Diagnostic("file2", 4, 3, 7, "W", "message"),
+            vimrtags.Diagnostic("file1", 4, 4, 8, "W", "message")
         ]
         # Unused char_num property used to record original ordering.
         _to_qlist_dict.side_effect = lambda d: {"order": d._char_num}
@@ -1186,7 +1257,7 @@ class Test_Diagnostic_to_qlist_errors(VimRtagsTest):
 
 class Test_Diagnostic__to_qlist_dict(VimRtagsTest):
     def test_warning(self):
-        diagnostic = vimrtags.Diagnostic("file", 3, 4, "warning", "mock text")
+        diagnostic = vimrtags.Diagnostic("file", 3, 4, 5, "warning", "mock text")
 
         self.assertDictEqual(
             diagnostic._to_qlist_dict(), {
@@ -1195,7 +1266,7 @@ class Test_Diagnostic__to_qlist_dict(VimRtagsTest):
         )
 
     def test_error(self):
-        diagnostic = vimrtags.Diagnostic("file", 3, 4, "error", "mock text")
+        diagnostic = vimrtags.Diagnostic("file", 3, 4, 5, "error", "mock text")
 
         self.assertDictEqual(
             diagnostic._to_qlist_dict(), {
@@ -1204,7 +1275,7 @@ class Test_Diagnostic__to_qlist_dict(VimRtagsTest):
         )
 
     def test_fixit(self):
-        diagnostic = vimrtags.Diagnostic("file", 3, 4, "fixit", "mock text")
+        diagnostic = vimrtags.Diagnostic("file", 3, 4, 5, "fixit", "mock text")
 
         self.assertDictEqual(
             diagnostic._to_qlist_dict(), {
