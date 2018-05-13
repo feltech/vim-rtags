@@ -116,6 +116,7 @@ if g:rtagsUseDefaultMappings == 1
     noremap <Leader>rd :call rtags#Diagnostics()<CR>
     noremap <Leader>rD :call rtags#DiagnosticsAll()<CR>
     noremap <Leader>rx :call rtags#ApplyFixit()<CR>
+    noremap <Leader>rI :call rtags#InsertInclude()<CR>
 endif
 
 let s:script_folder_path = escape( expand( '<sfile>:p:h' ), '\' )
@@ -917,6 +918,10 @@ endfunction
 
 function! rtags#ApplyFixit()
     return s:Pyeval("vimrtags.Buffer.current().apply_fixits()")
+endfunction
+
+function! rtags#InsertInclude()
+    return s:Pyeval("vimrtags.Buffer.current().insert_include()")
 endfunction
 
 function! rtags#NotifyEdit()

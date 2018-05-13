@@ -86,6 +86,7 @@ It is possible to set its maximum size (number of entries), default is 100:
 | &lt;Leader&gt;rr | -V                               | Reindex current file                       |
 | &lt;Leader&gt;rl | -w                               | List all available projects                |
 | &lt;Leader&gt;rw | -e -r --rename                   | Rename symbol under cursor                 |
+| &lt;Leader&gt;rI | --include-file                   | Insert #include for symbol                 |
 | &lt;Leader&gt;rv | -k -r                            | Find virtuals                              |
 | &lt;Leader&gt;rd | --diagnose                       | Diagnose file for warnings and errors      |
 | &lt;Leader&gt;rD | --diagnose-all                   | Diagnose all files in project              |

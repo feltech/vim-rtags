@@ -6,6 +6,7 @@ import os
 import sys
 import re
 import logging
+import bisect
 from time import time
 
 
@@ -442,6 +443,51 @@ class Buffer(object):
         vim.command('lopen %d' % height)
 
         message("Fixits applied")
+
+    def insert_include(self):
+        symbol = vim.eval('expand("<cword>")')
+        if not symbol:
+            return message("No word under cursor")
+        include = run_rc_command([
+            '--current-file', self._vimbuffer.name, '--include-file', symbol
+        ])
+        if include is None:
+            return error("Failed to check for includes")
+        include = include.strip()
+        if not include:
+            return message('No include found for "%s"' % symbol)
+
+        logger.debug("Found include '%s' for '%s'" % (include, symbol))
+
+        existing_includes = []
+        for num, line in enumerate(self._vimbuffer):
+            stripped = line.strip()
+            if stripped.startswith("#include"):
+                if stripped == include:
+                    return message('"%s" already present' % include)
+                existing_includes.append((stripped, num))
+            if num > 500:
+                # We're unlikely to have includes this far down.
+                break
+
+        # Assume sorted list of includes (shoudn't matter too much if they're not sorted).
+        at_idx = bisect.bisect_right(existing_includes, (include, 0))
+
+        if at_idx < len(existing_includes):
+            line_idx = existing_includes[at_idx][1]
+        elif existing_includes:
+            line_idx = existing_includes[-1][1]
+        else:
+            line_idx = 0
+
+        logger.debug(
+            "Found existing includes %s, inserting at line %s" % (existing_includes, line_idx)
+        )
+
+        indentation_match = re.match(r"^(\s*)", self._vimbuffer[line_idx])
+        indentation = indentation_match.group(1)
+
+        self._vimbuffer[line_idx:line_idx] = [indentation + include]
 
     def _is_really_dirty(self):
         """ Check the dirty flag and confirm the buffer really is modified.
