@@ -779,6 +779,7 @@ class Test_Buffer__rtags_is_reindexing(BufferInstanceTest):
 @patch("plugin.vimrtags.logger", Mock(spec=logging.Logger))
 @patch("plugin.vimrtags.time", autospec=True)
 @patch("plugin.vimrtags.run_rc_command", autospec=True)
+@patch("plugin.vimrtags.get_rtags_variable", autospec=True)
 @patch("plugin.vimrtags.Diagnostic", autospec=True)
 @patch("plugin.vimrtags.Buffer._update_loclist", autospec=True)
 @patch("plugin.vimrtags.Buffer._place_signs", autospec=True)
@@ -787,8 +788,8 @@ class Test_Buffer__update_diagnostics(BufferInstanceTest):
 
     @patch("plugin.vimrtags.error", autospec=True)
     def test_rc_failed(
-        self, error, on_cursor_moved, _place_signs, _update_loclist, Diagnostic, run_rc_command,
-        time
+        self, error, on_cursor_moved, _place_signs, _update_loclist, Diagnostic,
+        get_rtags_variable, run_rc_command, time
     ):
         run_rc_command.return_value = None
 
@@ -798,43 +799,76 @@ class Test_Buffer__update_diagnostics(BufferInstanceTest):
         self.assertFalse(_update_loclist.called)
         self.assertFalse(_place_signs.called)
 
-    def test_success(
-        self, on_cursor_moved, _place_signs, _update_loclist, Diagnostic, run_rc_command, time
-    ):
-        # setup
-
+    def prepare(self, run_rc_command, Diagnostic, on_cursor_moved):
         self.buffer._diagnostics = "replace me"
         self.buffer._line_num_last = "replace me"
-        open_loclist = Mock()
+        self.open_loclist = Mock()
 
         run_rc_command.return_value = '{"checkStyle": {"mock buffer": ["diag 1", "diag 2"]}}'
 
-        diag1 = Mock(sign_line=3)
-        diag2 = Mock(sign_line=12)
-        Diagnostic.from_rtags_errors.return_value = [diag1, diag2]
+        self.diag1 = Mock(sign_line=3)
+        self.diag2 = Mock(sign_line=12)
+        Diagnostic.from_rtags_errors.return_value = [self.diag1, self.diag2]
 
         on_cursor_moved.side_effect = (
             lambda *a, **k: self.assertEqual(self.buffer._line_num_last, -1)
         )
 
-        # action
-
-        self.buffer._update_diagnostics(open_loclist=open_loclist)
-
-        # confirm
-
-        run_rc_command.assert_called_once_with([
-            '--diagnose-all', '--synchronous-diagnostics', '--json'
-        ])
+    def assert_success(
+        self, get_rtags_variable, Diagnostic, _update_loclist, _place_signs, on_cursor_moved
+    ):
         Diagnostic.from_rtags_errors.assert_called_once_with(
             {'mock buffer': ["diag 1", "diag 2"]}, target="mock buffer"
         )
 
-        self.assertDictEqual(self.buffer._diagnostics, {3: diag1, 12: diag2})
+        self.assertDictEqual(self.buffer._diagnostics, {3: self.diag1, 12: self.diag2})
 
-        _update_loclist.assert_called_once_with(self.buffer, open_loclist)
+        get_rtags_variable.assert_called_once_with('EnhancedDiagnostics')
+        _update_loclist.assert_called_once_with(self.buffer, self.open_loclist)
         _place_signs.assert_called_once_with(self.buffer)
         on_cursor_moved.assert_called_once_with(self.buffer)
+
+    def test_success_standard(
+        self, on_cursor_moved, _place_signs, _update_loclist, Diagnostic,
+        get_rtags_variable, run_rc_command, time
+    ):
+        # setup
+        self.prepare(run_rc_command, Diagnostic, on_cursor_moved)
+        get_rtags_variable.return_value = "0"
+
+        # action
+        self.buffer._update_diagnostics(open_loclist=self.open_loclist)
+
+        # confirm
+
+        run_rc_command.assert_called_once_with([
+            '--diagnose', 'mock buffer', '--synchronous-diagnostics',
+            '--json'
+        ])
+        self.assert_success(
+            get_rtags_variable, Diagnostic, _update_loclist, _place_signs, on_cursor_moved
+        )
+
+    def test_success_enhanced(
+        self, on_cursor_moved, _place_signs, _update_loclist, Diagnostic,
+        get_rtags_variable, run_rc_command, time
+    ):
+        # setup
+        self.prepare(run_rc_command, Diagnostic, on_cursor_moved)
+        get_rtags_variable.return_value = "1"
+
+        # action
+        self.buffer._update_diagnostics(open_loclist=self.open_loclist)
+
+        # confirm
+
+        run_rc_command.assert_called_once_with([
+            '--diagnose-all', '--current-file', 'mock buffer', '--synchronous-diagnostics',
+            '--json'
+        ])
+        self.assert_success(
+            get_rtags_variable, Diagnostic, _update_loclist, _place_signs, on_cursor_moved
+        )
 
 
 @patch("plugin.vimrtags.logger", Mock(spec=logging.Logger))

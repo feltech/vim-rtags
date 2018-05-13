@@ -69,6 +69,10 @@ if !exists("g:rtagsAutoDiagnostics")
     let g:rtagsAutoDiagnostics = 1
 endif
 
+if !exists("g:rtagsEnhancedDiagnostics")
+    let g:rtagsEnhancedDiagnostics = 0
+endif
+
 if !exists("g:rtagsDiagnosticsPollingInterval")
     let g:rtagsDiagnosticsPollingInterval = 3000
 endif

@@ -105,6 +105,7 @@ g:rtagsMaxSearchResultWindowHeight
     Determines the maximum height of the search result window. When number of
     results is less than this parameter, the height is set to the number of
     results.
+
                                             *g:rtagsAutoDiagnostics*
                                             *rtags-variable-auto-diagnostics*
 g:rtagsAutoDiagnostics
@@ -113,6 +114,15 @@ g:rtagsAutoDiagnostics
     If enabled then diagnostic gutter signs will be updated in the currently
     active buffer automatically, and each line's diagnostic message will show
     in the message window as the cursor moves through the file.
+
+                                            *g:rtagsEnhancedDiagnostics*
+                                            *rtags-variable-enhanced-diagnostics*
+g:rtagsEnhancedDiagnostics
+
+    Default: 0
+    If enabled then diagnostic gutter signs will also show issues that are linked
+    from the diagnostics of other files.  There is a performance penalty to this
+    for large projects, so it is disabled by default.
 
                                 *g:rtagsDiagnosticsPollingInterval*
                                 *rtags-variable-diagnostics-polling-interval*

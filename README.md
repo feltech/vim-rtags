@@ -47,6 +47,13 @@ To disable this behaviour, set:
 
     let g:rtagsAutoDiagnostics = 0
 
+Diagnostic errors whose root cause is not found to be in the current buffer will not be shown.
+An example of this is passing incorrect arguments to ```make_unique```.  These diagnostics can be
+shown, but have a performance penalty, especially for large projects, so are disabled by default.
+To enable this behaviour, set:
+
+    let g:rtagsEnhancedDiagnostics = 1
+
 By default, search results are showed in a location list. Location lists
 are local to the current window. To use the vim QuickFix window, which is
 shared between all windows, set:

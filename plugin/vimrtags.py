@@ -485,9 +485,23 @@ class Buffer(object):
         self._last_diagnostics_time = time()
 
         # Get the diagnostics from rtags.
-        content = run_rc_command(
-            ['--diagnose-all', '--synchronous-diagnostics', '--json']
-        )
+        if get_rtags_variable('EnhancedDiagnostics') == "1":
+            # Diagnostics for unrelated files could have a "child" diagnostic referencing this file.
+            # E.g. incorrect constructor arguments to `make_unique` appears under unique_ptr.h
+            # Using `diagnose-all` thus allows more diagnostics to be identified.
+            content = run_rc_command([
+                '--diagnose-all', '--current-file', self._vimbuffer.name,
+                '--synchronous-diagnostics', '--json'
+            ])
+        else:
+            # Large projects will cause rc, and thus vim, to hang waiting for `diagnose-all`.
+            # This is mostly caused by the json conversion within rdm.  So unless rdm is patched,
+            # we probably have to stick with basic diagnostics for just this file.
+            content = run_rc_command([
+                '--diagnose', self._vimbuffer.name,
+                '--synchronous-diagnostics', '--json'
+            ])
+
         if content is None:
             return error('Failed to get diagnostics for "%s"' % self._vimbuffer.name)
         # logger.debug("Diagnostics for %s from rtags: %s" % (self._vimbuffer.name, content))
