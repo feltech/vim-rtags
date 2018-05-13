@@ -41,7 +41,7 @@ def get_identifier_beginning():
 
 def run_rc_command(arguments, content=None):
     rc_cmd = os.path.expanduser(vim.eval('g:rtagsRcCmd'))
-    cmdline = [rc_cmd] + arguments
+    cmdline = [rc_cmd, "--timeout", "5000"] + arguments
 
     encoding = 'utf-8'
     out = None
